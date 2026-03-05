@@ -1,0 +1,76 @@
+# ==========================================================
+# 🧠 GENERIC — TEMPLATE SENSOR
+#     Heating — Thermal Target (comfort / neutre / reduced)
+# ----------------------------------------------------------
+# 🎯 ROLE
+#   Compute a ternary thermal intent:
+#     - comfort
+#     - neutre
+#     - reduced
+#
+#   This sensor is PURE logic:
+#   - no services
+#   - no device control
+#   - no side effects
+#
+# ✅ OUTPUT VALUES (strict)
+#   comfort | neutre | reduced
+#
+# 🧩 OPTIONAL FEATURE
+#   Weather anticipation:
+#     if intent == comfort AND anticipation_on AND meteo_favorable
+#     then intent becomes neutre
+# ==========================================================
+
+- sensor:
+    - name: "Heating thermal target"
+      unique_id: heating_thermal_target
+      state: >
+        {% set UNAV = ['unknown','unavailable','none',''] %}
+
+        {# --- Inputs (replace entity ids to match your setup) --- #}
+        {% set ext_raw = states('sensor.outdoor_temperature') %}
+        {% set cold_raw = states('sensor.coldest_room_temperature') %}
+
+        {% set consigne = states('input_number.heating_setpoint') | float(20) %}
+        {% set offset_on = states('input_number.heating_offset_on') | float(0.5) %}
+        {% set offset_off = states('input_number.heating_offset_off') | float(0.5) %}
+
+        {% set ext_off = states('input_number.heating_outdoor_off') | float(18) %}
+
+        {# --- Optional meteo anticipation (safe defaults) --- #}
+        {% set anticipation_on = is_state('input_boolean.heating_weather_anticipation', 'on') %}
+        {% set meteo_favorable = is_state('binary_sensor.weather_favorable_heating', 'on') %}
+
+        {# --- Guard: missing critical signals -> unknown --- #}
+        {% if ext_raw | lower in UNAV or cold_raw | lower in UNAV %}
+          unknown
+        {% else %}
+
+          {% set ext = ext_raw | float %}
+          {% set cold = cold_raw | float %}
+
+          {% set seuil_on = consigne - offset_on %}
+          {% set seuil_off = consigne + offset_off %}
+
+          {# --- Core ternary intent (simplified) --- #}
+          {% if ext >= ext_off %}
+            {% set target = 'reduced' %}
+          {% else %}
+            {% if cold < seuil_on %}
+              {% set target = 'comfort' %}
+            {% elif cold >= seuil_off %}
+              {% set target = 'reduced' %}
+            {% else %}
+              {% set target = 'neutre' %}
+            {% endif %}
+          {% endif %}
+
+          {# --- Optional anticipation -> neutre --- #}
+          {% if target == 'comfort' and anticipation_on and meteo_favorable %}
+            neutre
+          {% else %}
+            {{ target }}
+          {% endif %}
+
+        {% endif %}
