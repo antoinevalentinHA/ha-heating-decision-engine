@@ -1,0 +1,144 @@
+# ==========================================================
+# HEATING DECISION ENGINE — Example Package
+# ----------------------------------------------------------
+# This package demonstrates a minimal installation of the
+# Heating Decision Engine.
+#
+# It includes:
+# - helper entities
+# - thermal target sensor
+# - trigger automation
+#
+# The decision engine and apply scripts must still be
+# installed from the repository scripts directory.
+#
+# This package is intended as an example configuration.
+# ==========================================================
+
+############################################################
+# Helpers
+############################################################
+
+input_text:
+
+  heating_desired_mode:
+    name: Heating desired mode
+
+  heating_decision_reason:
+    name: Heating decision reason
+
+
+input_boolean:
+
+  heating_override:
+    name: Heating override
+
+  heating_application_in_progress:
+    name: Heating application in progress
+
+
+input_select:
+
+  house_mode:
+    name: House mode
+    options:
+      - Home
+      - Vacation
+
+
+timer:
+
+  heating_antibounce:
+    name: Heating anti-bounce
+    duration: "00:02:00"
+
+
+############################################################
+# Thermal Target Sensor
+############################################################
+
+template:
+
+  - sensor:
+
+      - name: Heating thermal target
+        unique_id: heating_thermal_target
+
+        state: >
+
+          {% set UNAV = ['unknown','unavailable','none',''] %}
+
+          {% set ext_raw = states('sensor.outdoor_temperature') %}
+          {% set cold_raw = states('sensor.coldest_room_temperature') %}
+
+          {% if ext_raw | lower in UNAV or cold_raw | lower in UNAV %}
+            unknown
+          {% else %}
+
+            {% set ext = ext_raw | float %}
+            {% set cold = cold_raw | float %}
+
+            {% set setpoint = states('input_number.heating_setpoint') | float(20) %}
+            {% set offset_on = states('input_number.heating_offset_on') | float(0.5) %}
+            {% set offset_off = states('input_number.heating_offset_off') | float(0.5) %}
+
+            {% set outdoor_off = states('input_number.heating_outdoor_off') | float(18) %}
+
+            {% set seuil_on = setpoint - offset_on %}
+            {% set seuil_off = setpoint + offset_off %}
+
+            {% if ext >= outdoor_off %}
+              reduced
+            {% else %}
+              {% if cold < seuil_on %}
+                comfort
+              {% elif cold >= seuil_off %}
+                reduced
+              {% else %}
+                neutre
+              {% endif %}
+            {% endif %}
+
+          {% endif %}
+
+
+############################################################
+# Example Trigger Automation
+############################################################
+
+automation:
+
+  - alias: Heating Decision Engine — Example Trigger
+    mode: restart
+
+    trigger:
+
+      - platform: state
+        entity_id:
+          - binary_sensor.home_presence
+          - binary_sensor.any_window_open
+          - input_select.house_mode
+          - sensor.heating_thermal_target
+
+    action:
+
+      - service: script.heating_decision_engine
+        data:
+
+          action_comfort_script: script.heating_apply_comfort
+          action_reduced_script: script.heating_apply_reduced
+
+          current_program_entity: sensor.heating_program
+          keyword_reduced: eco
+          keyword_comfort: comfort
+
+          presence_entity: binary_sensor.home_presence
+          windows_open_entity: binary_sensor.any_window_open
+
+          vacation_mode_entity: input_select.house_mode
+          vacation_mode_value: Vacation
+
+          thermal_target_entity: sensor.heating_thermal_target
+
+          publish_mode_entity: input_text.heating_desired_mode
+          publish_reason_entity: input_text.heating_decision_reason
