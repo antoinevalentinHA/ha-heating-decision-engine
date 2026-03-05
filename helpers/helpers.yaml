@@ -1,0 +1,38 @@
+# ==========================================================
+# HELPERS — Heating decision engine (example)
+# ----------------------------------------------------------
+# Optional helpers used for:
+# - observability
+# - execution locking
+# - anti-bounce timer
+# ==========================================================
+
+input_text:
+
+  heating_desired_mode:
+    name: Heating desired mode
+
+  heating_decision_reason:
+    name: Heating decision reason
+
+
+input_boolean:
+
+  heating_application_in_progress:
+    name: Heating application in progress
+
+
+input_select:
+
+  heating_last_applied_mode:
+    name: Heating last applied mode
+    options:
+      - comfort
+      - reduced
+
+
+timer:
+
+  heating_antibounce:
+    name: Heating anti-bounce
+    duration: "00:02:00"
