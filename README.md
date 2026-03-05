@@ -1,5 +1,5 @@
 
-# 🧠 Heating Decision Engine
+# Heating Decision Engine
 
 A generic **Home Assistant decision engine** that centralizes heating logic into a single script.
 
@@ -78,6 +78,23 @@ data:
   presence_entity: binary_sensor.home_presence
   windows_open_entity: binary_sensor.any_window_open
 ```
+---
+
+## Example Package
+
+For quick testing, an example Home Assistant package is provided.
+packages/heating_decision_engine_example.yaml
+
+This package creates a minimal working setup including:
+
+- example helpers
+- a thermal target sensor
+- a trigger automation
+
+It allows testing the decision engine with minimal configuration.
+
+The decision engine and apply scripts must still be installed
+from the repository `scripts/` directory.
 
 ---
 
