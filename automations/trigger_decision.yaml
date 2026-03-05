@@ -1,0 +1,151 @@
+# ==========================================================
+# 🧠 GENERIC — AUTOMATION (example)
+#     Heating — Trigger decision engine
+# ----------------------------------------------------------
+# 🎯 ROLE
+#     Trigger the central heating decision engine whenever a
+#     relevant context signal changes.
+#
+# 🧱 DESIGN
+#     - This automation contains NO heating decision logic.
+#     - It only maps "context signals" -> decision engine call.
+#     - The decision engine is the single authority.
+#
+# ✅ USAGE
+#     - Replace the example entity_ids below with your own.
+#     - Keep the trigger list exhaustive but non-decisionnel.
+#     - Optionally add a short stabilization delay for noisy signals.
+#
+# ✅ COMPAT
+#     Home Assistant 2024.8+
+# ==========================================================
+
+- alias: "Heating — Trigger decision engine (example)"
+  mode: restart
+  max_exceeded: silent
+
+  trigger:
+
+    # ------------------------------------------------------
+    # Priority signals (override / system allowed)
+    # ------------------------------------------------------
+    - platform: state
+      entity_id: input_boolean.heating_override
+      id: "override"
+
+    - platform: state
+      entity_id: binary_sensor.heating_allowed
+      id: "system_allowed"
+
+    # ------------------------------------------------------
+    # Major blockers
+    # ------------------------------------------------------
+    - platform: state
+      entity_id: binary_sensor.any_window_open
+      id: "windows_open"
+
+    - platform: state
+      entity_id: input_boolean.airing_active
+      id: "airing_active"
+
+    - platform: state
+      entity_id: input_boolean.airing_block
+      id: "airing_block"
+
+    - platform: state
+      entity_id: input_select.house_mode
+      id: "house_mode"
+
+    - platform: state
+      entity_id: input_boolean.stove_active
+      id: "stove_active"
+
+    # ------------------------------------------------------
+    # Opportunity contexts
+    # ------------------------------------------------------
+    - platform: state
+      entity_id: binary_sensor.home_presence
+      id: "presence"
+
+    - platform: state
+      entity_id: sensor.heating_thermal_target
+      id: "thermal_target"
+
+    - platform: state
+      entity_id: input_boolean.absence_protection
+      id: "absence_protection"
+
+    # ------------------------------------------------------
+    # Orchestration / ordering (optional)
+    # ------------------------------------------------------
+    - platform: event
+      event_type: timer.finished
+      event_data:
+        entity_id: timer.heating_antibounce
+      id: "antibounce_expired"
+
+
+  action:
+
+    # ------------------------------------------------------
+    # Optional stabilization
+    # - Override should be immediate (no delay)
+    # - Other signals can wait 1–2s to absorb context noise
+    # ------------------------------------------------------
+    - alias: "Conditional stabilization (optional)"
+      choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ trigger.id == 'override' }}"
+          sequence: []
+      default:
+        - delay: "00:00:02"
+
+    # ------------------------------------------------------
+    # Call the decision engine
+    # ------------------------------------------------------
+    - alias: "Call decision engine"
+      service: script.heating_decision_engine
+      data:
+
+        # -------------------------------
+        # Required
+        # -------------------------------
+        action_comfort_script: script.heating_apply_comfort_robust
+        action_reduced_script: script.heating_apply_reduced_robust
+
+        current_program_entity: sensor.heating_current_program
+        keyword_reduced: eco
+        keyword_comfort: comfort
+
+        # -------------------------------
+        # Signals (optional)
+        # -------------------------------
+        override_entity: input_boolean.heating_override
+        system_allowed_entity: binary_sensor.heating_allowed
+
+        airing_active_entity: input_boolean.airing_active
+        airing_block_entity: input_boolean.airing_block
+        windows_open_entity: binary_sensor.any_window_open
+
+        vacation_mode_entity: input_select.house_mode
+        vacation_mode_value: "Vacation"
+
+        stove_block_entity: input_boolean.stove_active
+
+        presence_entity: binary_sensor.home_presence
+        thermal_target_entity: sensor.heating_thermal_target
+
+        absence_protection_entity: input_boolean.absence_protection
+
+        # -------------------------------
+        # Anti-bounce (optional)
+        # -------------------------------
+        antibounce_timer_entity: timer.heating_antibounce
+
+        # -------------------------------
+        # Observability (optional)
+        # -------------------------------
+        publish_mode_entity: input_text.heating_desired_mode
+        publish_reason_entity: input_text.heating_decision_reason
+        logbook_entity: sensor.heating_current_program
