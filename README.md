@@ -1,4 +1,4 @@
-```markdown
+
 # Heating Decision Engine
 
 Generic **Home Assistant script** implementing a centralized heating decision engine.
@@ -9,16 +9,14 @@ The goal is to move heating logic out of scattered automations and into a **sing
 
 ---
 
-# Concept
+## Concept
 
-Most Home Assistant installations control heating with multiple automations like:
+Most Home Assistant installations control heating with multiple independent automations:
 
 ```
-
-if window open ? reduce heating
-if presence ? comfort
-if vacation ? eco
-
+if window open -> reduce heating
+if presence -> comfort
+if vacation -> eco
 ```
 
 Over time this creates overlapping logic, race conditions, and unnecessary service calls.
@@ -26,15 +24,16 @@ Over time this creates overlapping logic, race conditions, and unnecessary servi
 This project implements a different pattern:
 
 ```
-
 context signals
-?
-decision engine
-?
+      │
+      ▼
+heating_decision_engine
+      │
+      ▼
 desired heating mode
-?
+      │
+      ▼
 action scripts
-
 ```
 
 The decision engine:
@@ -46,7 +45,7 @@ The decision engine:
 
 ---
 
-# Features
+## Features
 
 - **Centralized decision logic**
 - **Strict priority hierarchy**
@@ -58,134 +57,119 @@ The decision engine:
 
 ---
 
-# Decision Output
+## Decision Output
 
 The engine produces one of three results:
 
-| Mode | Meaning |
-|-----|--------|
-| `comfort` | Heating should run in Comfort mode |
-| `reduced` | Heating should run in Reduced/Eco mode |
-| `neutre` | No action required |
+| Mode     | Meaning                                   |
+|----------|-------------------------------------------|
+| comfort  | Heating should run in Comfort mode        |
+| reduced  | Heating should run in Reduced / Eco mode  |
+| neutre   | No action required (explicit abstention)  |
 
 The `neutre` mode allows the engine to **explicitly abstain** when heating is already in the correct state or when no decision is required.
 
 ---
 
-# Priority Model
+## Priority Model
 
-The engine evaluates contexts using a strict hierarchy.
-
+The engine evaluates contexts using a strict hierarchy.  
 Higher levels always override lower ones.
 
 ```
-
 1. Operator override
 2. System restrictions
 3. Major contexts
 4. Opportunity contexts
-
 ```
 
-Example hierarchy:
+Example evaluation flow:
 
 ```
+override active        -> comfort
+system not allowed     -> reduced
 
-override ? comfort
+airing active          -> reduced
+windows open           -> reduced
+vacation mode          -> reduced
 
-system not allowed ? reduced
+presence detected      -> follow thermal target
+absence protection     -> comfort
 
-airing active ? reduced
-windows open ? reduced
-vacation mode ? reduced
-
-presence ? follow thermal target
-
-absence protection ? comfort
-
-default ? reduced
-
+default                -> reduced
 ```
 
 ---
 
-# Anti-Bounce Protection
+## Anti‑Bounce Protection
 
-To prevent rapid oscillations and API spam, the engine optionally uses a timer gate.
-
-Once a decision is applied:
+To prevent rapid oscillations and unnecessary API calls, the engine can optionally use a timer gate.
 
 ```
-
 decision applied
-?
+      │
+      ▼
 anti-bounce timer starts
-?
-no new decisions until timer is idle
-
+      │
+      ▼
+no new decisions until timer returns to idle
 ```
 
 This protects both the heating system and Home Assistant automations from rapid state changes.
 
 ---
 
-# Observability
+## Observability
 
 The engine can optionally publish:
 
-- the **desired mode**
+- the **desired heating mode**
 - the **decision reason**
 
-to helper entities.
-
-Example helpers:
+Example helper entities:
 
 ```
-
 input_text.heating_desired_mode
 input_text.heating_decision_reason
-
 ```
 
-This makes debugging and dashboard diagnostics much easier.
+This makes debugging and dashboard diagnostics significantly easier.
 
 ---
 
-# Action Scripts
+## Action Scripts
 
 The decision engine **does not control heating directly**.
 
 Instead it calls two external scripts:
 
 ```
-
 action_comfort_script
 action_reduced_script
-
 ```
 
 These scripts should apply the actual heating change.
 
-Example implementations:
+Possible implementations include:
 
 - `climate.set_preset_mode`
 - `select.select_option`
-- manufacturer integrations
+- vendor integrations
 - custom scripts
 
-Recommended interface:
+Recommended interface for these scripts:
 
 ```
-
 fields:
-reason:
-description: decision reason
+  reason:
+    description: Decision reason
+```
 
-````
+Passing the `reason` field allows the action layer to remain fully observable.
 
 ---
 
-# Example Call
+## Example Call
 
 ```yaml
 service: script.heating_decision_engine
@@ -208,24 +192,22 @@ data:
   publish_reason_entity: input_text.heating_decision_reason
 
   logbook_entity: sensor.heating_program
-````
+```
 
 ---
 
-# Recommended Architecture
+## Recommended Architecture
 
 ```
 context sensors
-    ¦
-    ¦
-    ?
+      │
+      ▼
 heating_decision_engine
-    ¦
-    ¦
-    ?
+      │
+      ▼
 action scripts
-    ¦
-    ?
+      │
+      ▼
 heating system
 ```
 
@@ -235,21 +217,21 @@ Automations simply trigger the engine when relevant context changes.
 
 ---
 
-# Why This Pattern?
+## Why This Pattern?
 
 This approach provides several advantages:
 
-* eliminates conflicting automations
-* improves traceability
-* reduces unnecessary service calls
-* simplifies maintenance
-* makes heating logic easier to reason about
+- eliminates conflicting automations
+- improves traceability
+- reduces unnecessary service calls
+- simplifies maintenance
+- makes heating logic easier to reason about
 
 Instead of dozens of independent automations, the system has **one place where decisions are made**.
 
 ---
 
-# Compatibility
+## Compatibility
 
 Tested with:
 
@@ -261,10 +243,6 @@ No custom integrations required.
 
 ---
 
-# License
+## License
 
 MIT License
-
-```
-
----
