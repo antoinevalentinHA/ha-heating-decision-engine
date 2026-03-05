@@ -1,0 +1,287 @@
+# ==========================================================
+# 🔥 GENERIC — SCRIPT : Heating — Apply Comfort (robust)
+# ----------------------------------------------------------
+# 🎯 ROLE
+#   Execute-only application layer:
+#   - Apply Comfort (preset/option) on a target entity
+#   - Retry until confirmation is observable (or attempts exhausted)
+#   - Optional lock + optional observability writes
+#
+# ✅ Guarantees
+#   - Idempotent: no send if already confirmed in Comfort
+#   - No false success: writes/logs only after confirmation
+#   - No orphan lock: lock is always released
+# ==========================================================
+
+heating_apply_comfort_robust:
+  alias: "Heating — Apply Comfort (robust)"
+  mode: restart
+
+  fields:
+    reason:
+      description: "Reason string from decision engine"
+      example: "windows_open"
+
+    target_entity:
+      description: "Entity to control (climate/select/etc.)"
+      example: "climate.house"
+
+    confirm_entity:
+      description: "Entity used to confirm current program (sensor/select)"
+      example: "sensor.heating_program"
+
+    confirm_keyword:
+      description: "Keyword that confirms Comfort (lowercase substring)"
+      example: "comfort"
+
+    lock_entity:
+      description: "Optional input_boolean used as execution lock"
+      example: "input_boolean.heating_application_in_progress"
+
+    last_mode_entity:
+      description: "Optional input_select to store last applied mode"
+      example: "input_select.heating_last_applied_mode"
+
+    reason_entity:
+      description: "Optional input_text to store last reason"
+      example: "input_text.heating_last_reason"
+
+    update_entity:
+      description: "Optional entity to force refresh after applying"
+      example: "climate.house"
+
+    max_attempts:
+      description: "Max retry attempts"
+      example: 5
+
+    send_delay:
+      description: "Delay after send (seconds)"
+      example: 10
+
+    refresh_delay:
+      description: "Delay after refresh (seconds)"
+      example: 20
+
+    # Action type (choose one)
+    climate_preset:
+      description: "If set, uses climate.set_preset_mode with this preset"
+      example: "comfort"
+
+    select_option:
+      description: "If set, uses select.select_option with this option"
+      example: "Comfort"
+
+  sequence:
+
+    # ------------------------------------------------------
+    # Normalize inputs (safe defaults)
+    # ------------------------------------------------------
+    - alias: "Normalize inputs"
+      variables:
+        _target: "{{ target_entity }}"
+        _confirm_e: "{{ confirm_entity | default('', true) }}"
+        _kw: "{{ (confirm_keyword | default('comfort', true)) | lower }}"
+
+        _lock_e: "{{ lock_entity | default('', true) }}"
+        _last_mode_e: "{{ last_mode_entity | default('', true) }}"
+        _reason_e: "{{ reason_entity | default('', true) }}"
+        _update_e: "{{ update_entity | default('', true) }}"
+
+        _attempts: "{{ (max_attempts | default(5, true)) | int(5) }}"
+        _send_delay: "{{ (send_delay | default(10, true)) | int(10) }}"
+        _refresh_delay: "{{ (refresh_delay | default(20, true)) | int(20) }}"
+
+        _preset: "{{ climate_preset | default('', true) }}"
+        _option: "{{ select_option | default('', true) }}"
+
+        _action_ok: "{{ (_preset | trim != '') or (_option | trim != '') }}"
+
+        _already_confirmed: >
+          {% if _confirm_e | trim == '' %}
+            false
+          {% else %}
+            {{ _kw in (states(_confirm_e) | lower) }}
+          {% endif %}
+
+    # ------------------------------------------------------
+    # Guard: must have an action configured
+    # ------------------------------------------------------
+    - alias: "Guard action configured"
+      condition: template
+      value_template: "{{ _action_ok }}"
+
+    # ------------------------------------------------------
+    # If already confirmed: optional writes, then exit cleanly
+    # ------------------------------------------------------
+    - alias: "No-op if already confirmed"
+      choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ _already_confirmed }}"
+          sequence:
+
+            - alias: "Write last mode (optional)"
+              choose:
+                - conditions:
+                    - condition: template
+                      value_template: "{{ _last_mode_e | trim != '' }}"
+                  sequence:
+                    - service: input_select.select_option
+                      target:
+                        entity_id: "{{ _last_mode_e }}"
+                      data:
+                        option: "comfort"
+
+            - alias: "Write reason (optional)"
+              choose:
+                - conditions:
+                    - condition: template
+                      value_template: "{{ _reason_e | trim != '' and reason is defined }}"
+                  sequence:
+                    - service: input_text.set_value
+                      target:
+                        entity_id: "{{ _reason_e }}"
+                      data:
+                        value: "{{ reason }}"
+
+            - stop: "Already in Comfort (confirmed) — no action"
+
+      default: []
+
+    # ------------------------------------------------------
+    # Lock ON (optional) — only when we will actually attempt
+    # ------------------------------------------------------
+    - alias: "Lock ON (optional)"
+      choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ _lock_e | trim != '' }}"
+          sequence:
+            - service: input_boolean.turn_on
+              target:
+                entity_id: "{{ _lock_e }}"
+
+    # ------------------------------------------------------
+    # Retry loop: apply + refresh until confirmed OR attempts reached
+    # ------------------------------------------------------
+    - alias: "Retry apply + confirm"
+      repeat:
+        sequence:
+
+          - alias: "Apply Comfort"
+            choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ _preset | trim != '' }}"
+                sequence:
+                  - service: climate.set_preset_mode
+                    target:
+                      entity_id: "{{ _target }}"
+                    data:
+                      preset_mode: "{{ _preset }}"
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ _option | trim != '' }}"
+                sequence:
+                  - service: select.select_option
+                    target:
+                      entity_id: "{{ _target }}"
+                    data:
+                      option: "{{ _option }}"
+
+          - delay:
+              seconds: "{{ _send_delay }}"
+
+          - alias: "Refresh (optional)"
+            choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ _update_e | trim != '' }}"
+                sequence:
+                  - service: homeassistant.update_entity
+                    target:
+                      entity_id: "{{ _update_e }}"
+
+          - delay:
+              seconds: "{{ _refresh_delay }}"
+
+        until:
+          - condition: template
+            value_template: >
+              {% set confirmed =
+                  (_confirm_e | trim != '')
+                  and (_kw in (states(_confirm_e) | lower))
+              %}
+              {{ confirmed or (repeat.index >= _attempts) }}
+
+    # ------------------------------------------------------
+    # Final confirmation gate
+    # ------------------------------------------------------
+    - alias: "Final confirmation"
+      variables:
+        _confirmed_final: >
+          {% if _confirm_e | trim == '' %}
+            false
+          {% else %}
+            {{ _kw in (states(_confirm_e) | lower) }}
+          {% endif %}
+
+    # ------------------------------------------------------
+    # Optional writes ONLY on success
+    # ------------------------------------------------------
+    - alias: "Write last mode / reason on success (optional)"
+      choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ _confirmed_final }}"
+          sequence:
+
+            - choose:
+                - conditions:
+                    - condition: template
+                      value_template: "{{ _last_mode_e | trim != '' }}"
+                  sequence:
+                    - service: input_select.select_option
+                      target:
+                        entity_id: "{{ _last_mode_e }}"
+                      data:
+                        option: "comfort"
+
+            - choose:
+                - conditions:
+                    - condition: template
+                      value_template: "{{ _reason_e | trim != '' and reason is defined }}"
+                  sequence:
+                    - service: input_text.set_value
+                      target:
+                        entity_id: "{{ _reason_e }}"
+                      data:
+                        value: "{{ reason }}"
+
+      default: []
+
+    # ------------------------------------------------------
+    # Lock OFF (optional) — ALWAYS executed (no stop above)
+    # ------------------------------------------------------
+    - alias: "Lock OFF (optional)"
+      choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ _lock_e | trim != '' }}"
+          sequence:
+            - service: input_boolean.turn_off
+              target:
+                entity_id: "{{ _lock_e }}"
+
+    # ------------------------------------------------------
+    # Optional: stop on failure (after lock release)
+    # ------------------------------------------------------
+    - alias: "Stop on failure (after cleanup)"
+      choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ not _confirmed_final }}"
+          sequence:
+            - stop: "Comfort apply not confirmed (attempts exhausted)"
+      default: []
