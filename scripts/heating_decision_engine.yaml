@@ -1,0 +1,400 @@
+# ==========================================================
+# 🧠 GENERIC — SCRIPT : Central Heating Decision Engine
+# ----------------------------------------------------------
+# 🎯 ROLE
+#   Compute a desired heating mode from context signals, with
+#   strict priority, abstention support, and zero useless calls.
+#
+# 🧱 OUTPUT MODES
+#   - comfort : request Comfort
+#   - reduced : request Reduced
+#   - neutre  : abstain (authorize without acting)
+#
+# 🧩 DESIGN
+#   - Decision-only (calls action scripts only if change needed)
+#   - Optional anti-bounce timer gate
+#   - Optional publishing of desired_mode + reason to helpers
+#
+# 🔌 ACTION INTERFACE (expected)
+#   action_comfort_script / action_reduced_script should accept:
+#     - field: reason (string, optional but recommended)
+#
+# ✅ COMPAT
+#   Home Assistant 2024.8+
+# ==========================================================
+
+heating_decision_engine:
+  alias: "Heating - Central decision engine (generic)"
+  description: >
+    Generic decision engine (Comfort/Reduced/Neutre) with strict
+    priority, abstention, and observability.
+
+  mode: single
+
+  fields:
+
+    # ------------------------------------------------------
+    # INPUT ENTITIES (OPTIONAL)
+    # ------------------------------------------------------
+
+    override_entity:
+      description: "input_boolean (on = force comfort)"
+      example: "input_boolean.heating_override"
+
+    system_allowed_entity:
+      description: "binary_sensor (on = heating allowed)"
+      example: "binary_sensor.heating_allowed"
+
+    airing_active_entity:
+      description: "input_boolean/binary_sensor (on = airing active)"
+      example: "input_boolean.airing_active"
+
+    airing_block_entity:
+      description: "input_boolean/binary_sensor (on = airing block active)"
+      example: "input_boolean.heating_block_airing"
+
+    windows_open_entity:
+      description: "binary_sensor (on = any window open)"
+      example: "binary_sensor.any_window_open"
+
+    vacation_mode_entity:
+      description: "input_select (state == vacation_mode_value)"
+      example: "input_select.house_mode"
+
+    vacation_mode_value:
+      description: "Value meaning vacation in vacation_mode_entity (no default)"
+      example: "Vacation"
+
+    stove_block_entity:
+      description: "input_boolean/binary_sensor (on = stove active)"
+      example: "input_boolean.stove_active"
+
+    presence_entity:
+      description: "binary_sensor (on = presence detected)"
+      example: "binary_sensor.presence"
+
+    thermal_target_entity:
+      description: "sensor (state in comfort|reduced|neutre)"
+      example: "sensor.heating_target"
+
+    absence_protection_entity:
+      description: "input_boolean/binary_sensor (on = protect => comfort)"
+      example: "input_boolean.absence_protection"
+
+    # ------------------------------------------------------
+    # PROGRAM STATE NORMALIZATION
+    # ------------------------------------------------------
+
+    current_program_entity:
+      description: "sensor containing current program label"
+      example: "sensor.heating_program"
+
+    keyword_reduced:
+      description: "substring meaning Reduced in current_program_entity"
+      example: "eco"
+
+    keyword_comfort:
+      description: "substring meaning Comfort in current_program_entity"
+      example: "comfort"
+
+    # ------------------------------------------------------
+    # ANTI-BOUNCE (OPTIONAL)
+    # ------------------------------------------------------
+
+    antibounce_timer_entity:
+      description: "timer to prevent rapid decisions (idle required unless override)"
+      example: "timer.heating_antibounce"
+
+    # ------------------------------------------------------
+    # ACTION SCRIPTS (REQUIRED)
+    # ------------------------------------------------------
+
+    action_comfort_script:
+      description: "script to apply Comfort program"
+      example: "script.heating_apply_comfort"
+
+    action_reduced_script:
+      description: "script to apply Reduced program"
+      example: "script.heating_apply_reduced"
+
+    # ------------------------------------------------------
+    # OBSERVABILITY (OPTIONAL)
+    # ------------------------------------------------------
+
+    publish_mode_entity:
+      description: "input_text to store desired mode"
+      example: "input_text.heating_desired_mode"
+
+    publish_reason_entity:
+      description: "input_text to store reason"
+      example: "input_text.heating_decision_reason"
+
+    logbook_entity:
+      description: "entity_id to attach logbook entry to"
+      example: "sensor.heating_program"
+
+  sequence:
+
+    # ------------------------------------------------------
+    # Variables: compute everything up-front (safe defaults)
+    # ------------------------------------------------------
+    - alias: "Compute decision"
+      variables:
+
+        kw_red: "{{ (keyword_reduced | default('eco', true)) | lower }}"
+        kw_comf: "{{ (keyword_comfort | default('comfort', true)) | lower }}"
+
+        program_raw: >
+          {% set e = current_program_entity | default('', true) %}
+          {% if e == '' %}
+            unknown
+          {% else %}
+            {{ states(e) | lower }}
+          {% endif %}
+
+        prog_actuel: >
+          {% if program_raw in ['unknown','unavailable','none',''] %}
+            unknown
+          {% elif kw_red in program_raw %}
+            reduced
+          {% elif kw_comf in program_raw or 'confort' in program_raw %}
+            comfort
+          {% else %}
+            unknown
+          {% endif %}
+
+        override_on: >
+          {% set e = override_entity | default('', true) %}
+          {{ e != '' and is_state(e, 'on') }}
+
+        antibounce_idle: >
+          {% set t = antibounce_timer_entity | default('', true) %}
+          {{ t == '' or is_state(t, 'idle') }}
+
+        system_allowed_on: >
+          {% set e = system_allowed_entity | default('', true) %}
+          {{ e == '' or is_state(e, 'on') }}
+
+        airing_active_on: >
+          {% set e = airing_active_entity | default('', true) %}
+          {{ e != '' and is_state(e, 'on') }}
+
+        airing_block_on: >
+          {% set e = airing_block_entity | default('', true) %}
+          {{ e != '' and is_state(e, 'on') }}
+
+        windows_open_on: >
+          {% set e = windows_open_entity | default('', true) %}
+          {{ e != '' and is_state(e, 'on') }}
+
+        stove_block_on: >
+          {% set e = stove_block_entity | default('', true) %}
+          {{ e != '' and is_state(e, 'on') }}
+
+        presence_on: >
+          {% set e = presence_entity | default('', true) %}
+          {{ e != '' and is_state(e, 'on') }}
+
+        absence_protection_on: >
+          {% set e = absence_protection_entity | default('', true) %}
+          {{ e != '' and is_state(e, 'on') }}
+
+        vacation_on: >
+          {% set e = vacation_mode_entity | default('', true) %}
+          {% set v = vacation_mode_value | default('', true) %}
+          {{ e != '' and v != '' and states(e) == v }}
+
+        thermal_target: >
+          {% set e = thermal_target_entity | default('', true) %}
+          {% if e == '' %}
+            unknown
+          {% else %}
+            {{ states(e) | lower }}
+          {% endif %}
+
+        desired_mode: >
+          {% if override_on %}
+            comfort
+
+          {% elif not system_allowed_on %}
+            reduced
+
+          {% elif airing_active_on %}
+            reduced
+
+          {% elif airing_block_on %}
+            reduced
+
+          {% elif windows_open_on %}
+            reduced
+
+          {% elif vacation_on %}
+            reduced
+
+          {% elif stove_block_on %}
+            reduced
+
+          {% elif presence_on %}
+            {% if thermal_target in ['comfort','reduced','neutre'] %}
+              {{ thermal_target }}
+            {% else %}
+              neutre
+            {% endif %}
+
+          {% elif absence_protection_on %}
+            comfort
+
+          {% else %}
+            reduced
+          {% endif %}
+
+        reason: >
+          {% if override_on %}
+            operator_override
+
+          {% elif not system_allowed_on %}
+            system_not_allowed
+
+          {% elif airing_active_on %}
+            airing_active
+
+          {% elif airing_block_on %}
+            airing_block
+
+          {% elif windows_open_on %}
+            windows_open
+
+          {% elif vacation_on %}
+            vacation_mode
+
+          {% elif stove_block_on %}
+            stove_active
+
+          {% elif presence_on %}
+            {% if thermal_target == 'comfort' %}
+              thermal_need
+            {% elif thermal_target == 'reduced' %}
+              comfort_sufficient
+            {% elif thermal_target == 'neutre' %}
+              presence_abstain
+            {% else %}
+              presence_abstain
+            {% endif %}
+
+          {% elif absence_protection_on %}
+            absence_protection
+
+          {% else %}
+            absence
+          {% endif %}
+
+    # ------------------------------------------------------
+    # Guard: anti-bounce (unless override)
+    # ------------------------------------------------------
+    - alias: "Guard anti-bounce (unless override)"
+      condition: template
+      value_template: "{{ override_on or antibounce_idle }}"
+
+    # ------------------------------------------------------
+    # Guard: unknown current program => abstain unless override
+    # ------------------------------------------------------
+    - alias: "Guard unknown current program (unless override)"
+      condition: template
+      value_template: "{{ override_on or prog_actuel != 'unknown' }}"
+
+    # ------------------------------------------------------
+    # Publish decision (optional)
+    # ------------------------------------------------------
+    - alias: "Publish desired_mode (optional)"
+      choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ (publish_mode_entity | default('', true)) != '' }}"
+          sequence:
+            - service: input_text.set_value
+              target:
+                entity_id: "{{ publish_mode_entity }}"
+              data:
+                value: "{{ desired_mode }}"
+
+    - alias: "Publish reason (optional)"
+      choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ (publish_reason_entity | default('', true)) != '' }}"
+          sequence:
+            - service: input_text.set_value
+              target:
+                entity_id: "{{ publish_reason_entity }}"
+              data:
+                value: "{{ reason }}"
+
+    # ------------------------------------------------------
+    # Abstention: neutre => stop
+    # ------------------------------------------------------
+    - alias: "Stop on neutre"
+      choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ desired_mode == 'neutre' }}"
+          sequence:
+            - stop: "Abstention (neutre) — no action"
+
+    # ------------------------------------------------------
+    # Guard: no change => stop
+    # ------------------------------------------------------
+    - alias: "Guard no change"
+      condition: template
+      value_template: "{{ desired_mode != prog_actuel }}"
+
+    # ------------------------------------------------------
+    # Apply change (decision -> action)
+    # ------------------------------------------------------
+    - alias: "Apply program change"
+      choose:
+
+        - conditions:
+            - condition: template
+              value_template: "{{ desired_mode == 'comfort' }}"
+          sequence:
+            - service: "{{ action_comfort_script }}"
+              data:
+                reason: "{{ reason }}"
+
+        - conditions:
+            - condition: template
+              value_template: "{{ desired_mode == 'reduced' }}"
+          sequence:
+            - service: "{{ action_reduced_script }}"
+              data:
+                reason: "{{ reason }}"
+
+    # ------------------------------------------------------
+    # Start anti-bounce (optional)
+    # ------------------------------------------------------
+    - alias: "Start anti-bounce (optional)"
+      choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ (antibounce_timer_entity | default('', true)) != '' }}"
+          sequence:
+            - service: timer.start
+              target:
+                entity_id: "{{ antibounce_timer_entity }}"
+
+    # ------------------------------------------------------
+    # Logbook (optional)
+    # ------------------------------------------------------
+    - alias: "Log decision (optional)"
+      choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ (logbook_entity | default('', true)) != '' }}"
+          sequence:
+            - service: logbook.log
+              data:
+                name: "Heating - Decision"
+                message: >
+                  Decision applied: {{ desired_mode }} (was {{ prog_actuel }}).
+                  Reason: {{ reason }}.
+                entity_id: "{{ logbook_entity }}"
